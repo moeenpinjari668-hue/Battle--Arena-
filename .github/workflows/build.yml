@@ -23,7 +23,6 @@ jobs:
 
       - name: Extract Project ZIP
         run: |
-          # ZIP ka naam badal do taaki brackets se error na aaye
           for f in *.zip; do mv "$f" app.zip; done
           unzip -o app.zip
           if [ ! -f "pubspec.yaml" ]; then
@@ -37,21 +36,17 @@ jobs:
         run: |
           python3 -c "
           import os, shutil, sys
-          
           found = None
           for root, dirs, files in os.walk('.'):
               for file in files:
-                  # Yahan change kiya hai: Ab (4) ya jo bhi ho, 'google-services' se shuru hone wali json file pakad lega
                   if file.startswith('google-services') and file.endswith('.json'):
                       found = os.path.join(root, file)
                       break
               if found:
                   break
-                  
           if found:
               print(f'✅ Found file at: {found}')
               os.makedirs('android/app', exist_ok=True)
-              # Copy karte waqt exact sahi naam de dega
               shutil.copy(found, 'android/app/google-services.json')
               print('✅ Copied successfully to android/app/google-services.json')
           else:
@@ -80,34 +75,23 @@ jobs:
               with open(kts_path, 'w') as f:
                   f.write(content)
               print('Patched build.gradle.kts with Desugaring!')
-              
-          groovy_path = 'android/app/build.gradle'
-          if os.path.exists(groovy_path):
-              with open(groovy_path, 'r') as f:
-                  content = f.read()
-              content = re.sub(r'minSdkVersion\s+.*', 'minSdkVersion 23', content)
-              content = re.sub(r'compileSdkVersion\s+.*', 'compileSdkVersion 36', content)
-              content = re.sub(r'targetSdkVersion\s+.*', 'targetSdkVersion 34', content)
-              if 'multiDexEnabled' not in content:
-                  content = content.replace('defaultConfig {', 'defaultConfig {\n        multiDexEnabled true')
-              if 'coreLibraryDesugaringEnabled' not in content:
-                  content = re.sub(r'compileOptions\s*\{', 'compileOptions {\n        coreLibraryDesugaringEnabled true', content)
-              if 'coreLibraryDesugaring' not in content:
-                  content += '\n\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n'
-              with open(groovy_path, 'w') as f:
-                  f.write(content)
-              print('Patched build.gradle with Desugaring!')
 
+          # Safely patching the manifest
           manifest_path = 'android/app/src/main/AndroidManifest.xml'
           try:
               with open(manifest_path, 'r') as f:
                   m = f.read()
+              
+              # Change App Name
               m = m.replace('android:label=\"battle_arena\"', 'android:label=\"Battle Arena\"')
+              
+              # Add Internet Permission safely before closing tag (100% valid XML)
               if 'android.permission.INTERNET' not in m:
-                  m = m.replace('<application', '<uses-permission android:name=\"android.permission.INTERNET\"/>\n    <application')
+                  m = m.replace('</manifest>', '    <uses-permission android:name=\"android.permission.INTERNET\"/>\n</manifest>')
+                  
               with open(manifest_path, 'w') as f:
                   f.write(m)
-              print('Updated Manifest')
+              print('Updated Manifest successfully without breaking XML.')
           except Exception as e:
               print('Manifest error:', e)
           "
