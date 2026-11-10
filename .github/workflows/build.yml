@@ -23,27 +23,40 @@ jobs:
 
       - name: Extract Project ZIP
         run: |
-          unzip -o *.zip
+          # ZIP ka naam badal do taaki brackets se error na aaye
+          for f in *.zip; do mv "$f" app.zip; done
+          unzip -o app.zip
           if [ ! -f "pubspec.yaml" ]; then
-            SUBDIR=$(find . -maxdepth 2 -name "pubspec.yaml" -exec dirname {} \;)
+            SUBDIR=$(find . -maxdepth 2 -name "pubspec.yaml" -exec dirname {} \; | head -n 1)
             if [ -n "$SUBDIR" ] && [ "$SUBDIR" != "." ]; then
               cp -r $SUBDIR/* .
             fi
           fi
 
-      # 🔥 YEH NAYA STEP HAI: Root se file utha kar android/app/ mein daalega
       - name: Setup Firebase Config
         run: |
-          mkdir -p android/app
-          if [ -f "google-services (4).json" ]; then
-            echo "✅ Found google-services (4).json in root. Copying to android/app/"
-            cp google-services (4).json android/app/google-services (4).json
-          elif [ -f "android/app/google-services.json" ]; then
-            echo "✅ google-services (4).json is already in android/app/"
-          else
-            echo "❌ ERROR: google-services (4).json is MISSING from the whole repo!"
-            exit 1
-          fi
+          python3 -c "
+          import os, shutil, sys
+          
+          found = None
+          for root, dirs, files in os.walk('.'):
+              if 'google-services.json' in files:
+                  found = os.path.join(root, 'google-services.json')
+                  break
+                  
+          if found:
+              print(f'✅ Found google-services.json at: {found}')
+              os.makedirs('android/app', exist_ok=True)
+              shutil.copy(found, 'android/app/google-services.json')
+              print('✅ Copied successfully to android/app/')
+          else:
+              print('❌ ERROR: google-services.json is completely MISSING!')
+              print('Here are all the files in your repo:')
+              for root, dirs, files in os.walk('.'):
+                  for f in files:
+                      print(os.path.join(root, f))
+              sys.exit(1)
+          "
 
       - name: Patch Android Config for Desugaring & SDKs
         run: |
