@@ -54,6 +54,58 @@ jobs:
               sys.exit(1)
           "
 
+      # 🔥 YEH NAYA STEP HAI: Purani kharab file ko hata kar nayi valid XML file banayega
+      - name: Overwrite Clean Android Manifest
+        run: |
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              
+              <application
+                  android:label="Battle Arena"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:taskAffinity=""
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                        android:name="io.flutter.embedding.android.NormalTheme"
+                        android:resource="@style/NormalTheme"
+                        />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+                  <meta-data
+                      android:name="com.google.firebase.messaging.default_notification_channel_id"
+                      android:value="high_importance_channel" />
+              </application>
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.PROCESS_TEXT"/>
+                      <data android:mimeType="text/plain"/>
+                  </intent>
+              </queries>
+          </manifest>
+          EOF
+          echo "✅ Replaced AndroidManifest.xml with a clean, valid XML version."
+
       - name: Patch Android Config for Desugaring & SDKs
         run: |
           python3 -c "
@@ -75,25 +127,6 @@ jobs:
               with open(kts_path, 'w') as f:
                   f.write(content)
               print('Patched build.gradle.kts with Desugaring!')
-
-          # Safely patching the manifest
-          manifest_path = 'android/app/src/main/AndroidManifest.xml'
-          try:
-              with open(manifest_path, 'r') as f:
-                  m = f.read()
-              
-              # Change App Name
-              m = m.replace('android:label=\"battle_arena\"', 'android:label=\"Battle Arena\"')
-              
-              # Add Internet Permission safely before closing tag (100% valid XML)
-              if 'android.permission.INTERNET' not in m:
-                  m = m.replace('</manifest>', '    <uses-permission android:name=\"android.permission.INTERNET\"/>\n</manifest>')
-                  
-              with open(manifest_path, 'w') as f:
-                  f.write(m)
-              print('Updated Manifest successfully without breaking XML.')
-          except Exception as e:
-              print('Manifest error:', e)
           "
 
       - name: Setup App Launcher Icon
