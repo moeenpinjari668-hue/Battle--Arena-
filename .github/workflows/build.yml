@@ -35,13 +35,13 @@ jobs:
       - name: Setup Firebase Config
         run: |
           mkdir -p android/app
-          if [ -f "google-services.json" ]; then
-            echo "✅ Found google-services.json in root. Copying to android/app/"
-            cp google-services.json android/app/google-services.json
+          if [ -f "google-services (4).json" ]; then
+            echo "✅ Found google-services (4).json in root. Copying to android/app/"
+            cp google-services (4).json android/app/google-services (4).json
           elif [ -f "android/app/google-services.json" ]; then
-            echo "✅ google-services.json is already in android/app/"
+            echo "✅ google-services (4).json is already in android/app/"
           else
-            echo "❌ ERROR: google-services.json is MISSING from the whole repo!"
+            echo "❌ ERROR: google-services (4).json is MISSING from the whole repo!"
             exit 1
           fi
 
