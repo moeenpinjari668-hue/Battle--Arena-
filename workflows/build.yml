@@ -1,1 +1,119 @@
+name: Build Battle Arena APK
 
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Extract Project ZIP
+        run: |
+          unzip -o *.zip
+          if [ ! -f "pubspec.yaml" ]; then
+            SUBDIR=$(find . -maxdepth 2 -name "pubspec.yaml" -exec dirname {} \;)
+            if [ -n "$SUBDIR" ] && [ "$SUBDIR" != "." ]; then
+              cp -r $SUBDIR/* .
+            fi
+          fi
+
+      - name: Check Firebase Config
+        run: |
+          if [ ! -f "android/app/google-services.json" ]; then
+            echo "❌ ERROR: google-services.json is missing in android/app/ folder!"
+            echo "Please add it to your ZIP file."
+            exit 1
+          fi
+          echo "✅ google-services.json is present."
+
+      - name: Patch Android Config for Desugaring & SDKs
+        run: |
+          python3 -c "
+          import re, os
+          
+          kts_path = 'android/app/build.gradle.kts'
+          if os.path.exists(kts_path):
+              with open(kts_path, 'r') as f:
+                  content = f.read()
+              content = re.sub(r'minSdk\s*=\s*.*', 'minSdk = 23', content)
+              content = re.sub(r'compileSdk\s*=\s*.*', 'compileSdk = 36', content)
+              content = re.sub(r'targetSdk\s*=\s*.*', 'targetSdk = 34', content)
+              if 'multiDexEnabled' not in content:
+                  content = content.replace('defaultConfig {', 'defaultConfig {\n        multiDexEnabled = true')
+              if 'isCoreLibraryDesugaringEnabled' not in content:
+                  content = re.sub(r'compileOptions\s*\{', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', content)
+              if 'coreLibraryDesugaring' not in content:
+                  content += '\n\ndependencies {\n    coreLibraryDesugaring(\"com.android.tools:desugar_jdk_libs:2.1.4\")\n}\n'
+              with open(kts_path, 'w') as f:
+                  f.write(content)
+              print('Patched build.gradle.kts with Desugaring!')
+              
+          groovy_path = 'android/app/build.gradle'
+          if os.path.exists(groovy_path):
+              with open(groovy_path, 'r') as f:
+                  content = f.read()
+              content = re.sub(r'minSdkVersion\s+.*', 'minSdkVersion 23', content)
+              content = re.sub(r'compileSdkVersion\s+.*', 'compileSdkVersion 36', content)
+              content = re.sub(r'targetSdkVersion\s+.*', 'targetSdkVersion 34', content)
+              if 'multiDexEnabled' not in content:
+                  content = content.replace('defaultConfig {', 'defaultConfig {\n        multiDexEnabled true')
+              if 'coreLibraryDesugaringEnabled' not in content:
+                  content = re.sub(r'compileOptions\s*\{', 'compileOptions {\n        coreLibraryDesugaringEnabled true', content)
+              if 'coreLibraryDesugaring' not in content:
+                  content += '\n\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n'
+              with open(groovy_path, 'w') as f:
+                  f.write(content)
+              print('Patched build.gradle with Desugaring!')
+
+          manifest_path = 'android/app/src/main/AndroidManifest.xml'
+          try:
+              with open(manifest_path, 'r') as f:
+                  m = f.read()
+              m = m.replace('android:label=\"battle_arena\"', 'android:label=\"Battle Arena\"')
+              if 'android.permission.INTERNET' not in m:
+                  m = m.replace('<application', '<uses-permission android:name=\"android.permission.INTERNET\"/>\n    <application')
+              with open(manifest_path, 'w') as f:
+                  f.write(m)
+              print('Updated Manifest')
+          except Exception as e:
+              print('Manifest error:', e)
+          "
+
+      - name: Setup App Launcher Icon
+        run: |
+          # Purani 26 wali folder hatao (taaki default icon na aaye)
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26
+          # Har mipmap folder me naya logo daalo
+          for d in android/app/src/main/res/mipmap-*; do
+            if [ -d "$d" ]; then
+              cp assets/app_logo.png "$d/ic_launcher.png"
+              cp assets/app_logo.png "$d/ic_launcher_round.png" 2>/dev/null || true
+            fi
+          done
+          echo "App launcher icon set to assets/app_logo.png"
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Build Release APK
+        run: flutter build apk --release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BattleArena-Release-APK
+          path: build/app/outputs/flutter-apk/*.apk
