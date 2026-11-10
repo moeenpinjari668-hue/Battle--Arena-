@@ -35,7 +35,9 @@ jobs:
       - name: Setup Firebase Config
         run: |
           python3 -c "
-          import os, shutil, sys
+          import os, shutil, sys, json
+          
+          # Step 1: File dhoondho
           found = None
           for root, dirs, files in os.walk('.'):
               for file in files:
@@ -44,11 +46,26 @@ jobs:
                       break
               if found:
                   break
+          
           if found:
               print(f'✅ Found file at: {found}')
               os.makedirs('android/app', exist_ok=True)
-              shutil.copy(found, 'android/app/google-services.json')
-              print('✅ Copied successfully to android/app/google-services.json')
+              
+              # Step 2: File ko load karo aur package name fix karo
+              with open(found, 'r') as f:
+                  data = json.load(f)
+              
+              # Har client ke andar package name change karo
+              if 'client' in data:
+                  for client in data['client']:
+                      if 'client_info' in client and 'android_client_info' in client['client_info']:
+                          client['client_info']['android_client_info']['package_name'] = 'com.battlearena.app'
+              
+              # Step 3: Fixed data ko nayi jagah save karo
+              with open('android/app/google-services.json', 'w') as f:
+                  json.dump(data, f, indent=2)
+              
+              print('✅ google-services.json fixed with package name: com.battlearena.app')
           else:
               print('❌ ERROR: google-services.json is completely MISSING!')
               sys.exit(1)
@@ -105,7 +122,6 @@ jobs:
           EOF
           echo "✅ Replaced AndroidManifest.xml with a clean, valid XML version."
 
-      # 🔥 YEH NAYA STEP HAI: Kotlin ko strictly 2.2.20 karega aur AGP 8.11.1 rakhega
       - name: Set Perfect AGP & Kotlin Versions
         run: |
           python3 -c "
@@ -119,7 +135,7 @@ jobs:
               # AGP version ko 8.11.1 karo
               content = re.sub(r'id\(\"com\.android\.application\"\)\s+version\s+\"[^\"]+\"', 'id(\"com.android.application\") version \"8.11.1\"', content)
               
-              # Kotlin version ko 2.2.20 karo (Flutter requirement)
+              # Kotlin version ko 2.2.20 karo
               content = re.sub(r'id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\"[^\"]+\"', 'id(\"org.jetbrains.kotlin.android\") version \"2.2.20\"', content)
               
               # Ensure google-services is present
@@ -130,7 +146,6 @@ jobs:
                   f.write(content)
               print('✅ Set AGP to 8.11.1 and Kotlin to 2.2.20 in settings.gradle.kts!')
 
-          # Root build.gradle.kts mein bhi kotlin_version change karo (agar hai toh)
           root_kts = 'android/build.gradle.kts'
           if os.path.exists(root_kts):
               with open(root_kts, 'r') as f:
@@ -179,7 +194,6 @@ jobs:
       - name: Get Dependencies
         run: flutter pub get
 
-      # 🔥 YAHAN FLAG ADD KIYA HAI: --android-skip-build-dependency-validation
       - name: Build Release APK
         run: flutter build apk --release --android-skip-build-dependency-validation
 
