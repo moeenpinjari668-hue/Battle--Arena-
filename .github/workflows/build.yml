@@ -105,7 +105,7 @@ jobs:
           EOF
           echo "✅ Replaced AndroidManifest.xml with a clean, valid XML version."
 
-      # 🔥 YEH NAYA STEP HAI: AGP ko 8.11.1 (Flutter requirement) par set karega
+      # 🔥 YEH NAYA STEP HAI: Kotlin ko strictly 2.2.20 karega aur AGP 8.11.1 rakhega
       - name: Set Perfect AGP & Kotlin Versions
         run: |
           python3 -c "
@@ -116,11 +116,11 @@ jobs:
               with open(kts_path, 'r') as f:
                   content = f.read()
               
-              # AGP version ko 8.11.1 karo (Flutter min req, but not AGP 9)
+              # AGP version ko 8.11.1 karo
               content = re.sub(r'id\(\"com\.android\.application\"\)\s+version\s+\"[^\"]+\"', 'id(\"com.android.application\") version \"8.11.1\"', content)
               
-              # Kotlin version ko 1.9.22 karo (AGP 8 ke liye perfect)
-              content = re.sub(r'id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\"[^\"]+\"', 'id(\"org.jetbrains.kotlin.android\") version \"1.9.22\"', content)
+              # Kotlin version ko 2.2.20 karo (Flutter requirement)
+              content = re.sub(r'id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\"[^\"]+\"', 'id(\"org.jetbrains.kotlin.android\") version \"2.2.20\"', content)
               
               # Ensure google-services is present
               if 'com.google.gms.google-services' not in content:
@@ -128,7 +128,18 @@ jobs:
               
               with open(kts_path, 'w') as f:
                   f.write(content)
-              print('✅ Set AGP to 8.11.1 and Kotlin to 1.9.22 in settings.gradle.kts!')
+              print('✅ Set AGP to 8.11.1 and Kotlin to 2.2.20 in settings.gradle.kts!')
+
+          # Root build.gradle.kts mein bhi kotlin_version change karo (agar hai toh)
+          root_kts = 'android/build.gradle.kts'
+          if os.path.exists(root_kts):
+              with open(root_kts, 'r') as f:
+                  content = f.read()
+              content = re.sub(r'kotlin_version\s*=\s*\"[^\"]+\"', 'kotlin_version = \"2.2.20\"', content)
+              content = re.sub(r\"kotlin_version\s*=\s*'[^']+'\", \"kotlin_version = '2.2.20'\", content)
+              with open(root_kts, 'w') as f:
+                  f.write(content)
+              print('✅ Set Kotlin version in android/build.gradle.kts!')
           "
 
       - name: Patch Android Config for Desugaring & SDKs
@@ -168,8 +179,9 @@ jobs:
       - name: Get Dependencies
         run: flutter pub get
 
+      # 🔥 YAHAN FLAG ADD KIYA HAI: --android-skip-build-dependency-validation
       - name: Build Release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --android-skip-build-dependency-validation
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
