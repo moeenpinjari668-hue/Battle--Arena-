@@ -128,43 +128,50 @@ jobs:
               print('Patched build.gradle.kts with Desugaring!')
           "
 
-      # 🔥 YEH NAYA STEP HAI: package_info_plus ko AGP 9 ke liye fix karega
-      - name: Patch package_info_plus for AGP 9
+      # 🔥 YEH NAYA STEP HAI: Saare plugins ko AGP 9 ke liye fix karega
+      - name: Patch Plugins for AGP 9 (Built-in Kotlin)
         run: |
           python3 -c "
           import os, re, glob
           
-          # Pub cache mein package_info_plus ka build.gradle dhoondho
           home = os.path.expanduser('~')
-          pattern = os.path.join(home, '.pub-cache', 'hosted', 'pub.dev', 'package_info_plus-*', 'android', 'build.gradle')
+          # Pub cache mein saare build.gradle files dhoondho
+          pattern = os.path.join(home, '.pub-cache', 'hosted', 'pub.dev', '*', 'android', 'build.gradle')
           files = glob.glob(pattern)
           
-          if not files:
-              print('⚠️ package_info_plus build.gradle not found in pub cache.')
-              exit(0)
-              
           for file in files:
-              print(f'Patching: {file}')
-              with open(file, 'r') as f:
-                  content = f.read()
+              try:
+                  with open(file, 'r') as f:
+                      content = f.read()
                   
-              # 1. Remove kotlin-android plugin apply line
-              content = re.sub(r\"apply plugin: ['\\\"]kotlin-android['\\\"]\n?\", '', content)
-              content = re.sub(r\"apply plugin: ['\\\"]org.jetbrains.kotlin.android['\\\"]\n?\", '', content)
-              
-              # 2. Add compileSdk if missing in android block
-              if 'compileSdk' not in content:
-                  # Simple approach: add compileSdk 36 right after 'android {' 
-                  content = re.sub(r'android\s*\{', 'android {\n    compileSdk 36', content)
+                  modified = False
                   
-              # 3. Add namespace if missing (AGP 8+ requirement, though likely present)
-              if 'namespace' not in content:
-                  # Try to infer namespace from package name
-                  content = re.sub(r'android\s*\{', 'android {\n    namespace \"dev.fluttercommunity.plus.packageinfo\"', content)
+                  # 1. kotlin-android apply line ko hatao (single/double quotes, with/without spaces)
+                  new_content = re.sub(r\"apply\s+plugin\s*:\s*['\\\"]kotlin-android['\\\"]\s*\n?\", '', content)
+                  new_content = re.sub(r\"apply\s+plugin\s*:\s*['\\\"]org\.jetbrains\.kotlin\.android['\\\"]\s*\n?\", '', new_content)
+                  new_content = re.sub(r\"id\s*\(?['\\\"]kotlin-android['\\\"]\)?\s*\n?\", '', new_content)
                   
-              with open(file, 'w') as f:
-                  f.write(content)
-              print(f'✅ Successfully patched {file}')
+                  if new_content != content:
+                      content = new_content
+                      modified = True
+                      print(f'Removed kotlin-android plugin from: {file}')
+                  
+                  # 2. compileSdk ensure karo
+                  if 'compileSdk' not in content:
+                      if 'compileSdkVersion' in content:
+                          content = re.sub(r'compileSdkVersion\s+\d+', 'compileSdk 36', content)
+                          modified = True
+                      else:
+                          # android { } block ke andar add karo
+                          content = re.sub(r'android\s*\{', 'android {\n    compileSdk 36', content)
+                          modified = True
+                  
+                  if modified:
+                      with open(file, 'w') as f:
+                          f.write(content)
+                      print(f'✅ Patched: {file}')
+              except Exception as e:
+                  print(f'⚠️ Could not patch {file}: {e}')
           "
 
       - name: Setup App Launcher Icon
