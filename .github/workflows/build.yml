@@ -40,21 +40,22 @@ jobs:
           
           found = None
           for root, dirs, files in os.walk('.'):
-              if 'google-services.json' in files:
-                  found = os.path.join(root, 'google-services.json')
+              for file in files:
+                  # Yahan change kiya hai: Ab (4) ya jo bhi ho, 'google-services' se shuru hone wali json file pakad lega
+                  if file.startswith('google-services') and file.endswith('.json'):
+                      found = os.path.join(root, file)
+                      break
+              if found:
                   break
                   
           if found:
-              print(f'✅ Found google-services.json at: {found}')
+              print(f'✅ Found file at: {found}')
               os.makedirs('android/app', exist_ok=True)
+              # Copy karte waqt exact sahi naam de dega
               shutil.copy(found, 'android/app/google-services.json')
-              print('✅ Copied successfully to android/app/')
+              print('✅ Copied successfully to android/app/google-services.json')
           else:
               print('❌ ERROR: google-services.json is completely MISSING!')
-              print('Here are all the files in your repo:')
-              for root, dirs, files in os.walk('.'):
-                  for f in files:
-                      print(os.path.join(root, f))
               sys.exit(1)
           "
 
