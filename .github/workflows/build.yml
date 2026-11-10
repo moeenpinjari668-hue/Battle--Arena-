@@ -105,6 +105,33 @@ jobs:
           EOF
           echo "✅ Replaced AndroidManifest.xml with a clean, valid XML version."
 
+      # 🔥 YEH NAYA STEP HAI: AGP aur Kotlin ko stable version par laayega
+      - name: Downgrade Gradle to Stable Versions (Fix AGP 9.0)
+        run: |
+          python3 -c "
+          import re, os
+          
+          # settings.gradle.kts file ko fix karo
+          kts_path = 'android/settings.gradle.kts'
+          if os.path.exists(kts_path):
+              with open(kts_path, 'r') as f:
+                  content = f.read()
+              
+              # AGP 9.x ko 8.7.0 se replace karo
+              content = re.sub(r'id\(\"com\.android\.application\"\)\s+version\s+\"[^\"]+\"\s+apply\s+false', 'id(\"com.android.application\") version \"8.7.0\" apply false', content)
+              
+              # Kotlin 2.x ko 1.9.22 se replace karo
+              content = re.sub(r'id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\"[^\"]+\"\s+apply\s+false', 'id(\"org.jetbrains.kotlin.android\") version \"1.9.22\" apply false', content)
+              
+              # Ensure google-services is present
+              if 'com.google.gms.google-services' not in content:
+                  content = re.sub(r'id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\"[^\"]+\"\s+apply\s+false', 'id(\"org.jetbrains.kotlin.android\") version \"1.9.22\" apply false\n    id(\"com.google.gms.google-services\") version \"4.4.2\" apply false', content)
+              
+              with open(kts_path, 'w') as f:
+                  f.write(content)
+              print('✅ Downgraded AGP and Kotlin to stable versions in settings.gradle.kts!')
+          "
+
       - name: Patch Android Config for Desugaring & SDKs
         run: |
           python3 -c "
@@ -126,52 +153,6 @@ jobs:
               with open(kts_path, 'w') as f:
                   f.write(content)
               print('Patched build.gradle.kts with Desugaring!')
-          "
-
-      # 🔥 YEH NAYA STEP HAI: Saare plugins ko AGP 9 ke liye fix karega
-      - name: Patch Plugins for AGP 9 (Built-in Kotlin)
-        run: |
-          python3 -c "
-          import os, re, glob
-          
-          home = os.path.expanduser('~')
-          # Pub cache mein saare build.gradle files dhoondho
-          pattern = os.path.join(home, '.pub-cache', 'hosted', 'pub.dev', '*', 'android', 'build.gradle')
-          files = glob.glob(pattern)
-          
-          for file in files:
-              try:
-                  with open(file, 'r') as f:
-                      content = f.read()
-                  
-                  modified = False
-                  
-                  # 1. kotlin-android apply line ko hatao (single/double quotes, with/without spaces)
-                  new_content = re.sub(r\"apply\s+plugin\s*:\s*['\\\"]kotlin-android['\\\"]\s*\n?\", '', content)
-                  new_content = re.sub(r\"apply\s+plugin\s*:\s*['\\\"]org\.jetbrains\.kotlin\.android['\\\"]\s*\n?\", '', new_content)
-                  new_content = re.sub(r\"id\s*\(?['\\\"]kotlin-android['\\\"]\)?\s*\n?\", '', new_content)
-                  
-                  if new_content != content:
-                      content = new_content
-                      modified = True
-                      print(f'Removed kotlin-android plugin from: {file}')
-                  
-                  # 2. compileSdk ensure karo
-                  if 'compileSdk' not in content:
-                      if 'compileSdkVersion' in content:
-                          content = re.sub(r'compileSdkVersion\s+\d+', 'compileSdk 36', content)
-                          modified = True
-                      else:
-                          # android { } block ke andar add karo
-                          content = re.sub(r'android\s*\{', 'android {\n    compileSdk 36', content)
-                          modified = True
-                  
-                  if modified:
-                      with open(file, 'w') as f:
-                          f.write(content)
-                      print(f'✅ Patched: {file}')
-              except Exception as e:
-                  print(f'⚠️ Could not patch {file}: {e}')
           "
 
       - name: Setup App Launcher Icon
