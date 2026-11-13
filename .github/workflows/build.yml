@@ -133,7 +133,7 @@ jobs:
           import shutil
           from pathlib import Path
 
-          expected = "com.battlearena.app"
+          expected = "com.example.moeen.app"
           target = Path("android/app/google-services.json")
 
           candidates = [
