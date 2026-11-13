@@ -35,7 +35,7 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Flutter project ZIP not found!"
+            echo "ERROR: Project ZIP not found!"
             exit 1
           fi
 
@@ -45,14 +45,14 @@ jobs:
           PUBSPEC=$(find extracted -name pubspec.yaml | head -n 1)
 
           if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml not found inside ZIP!"
+            echo "ERROR: pubspec.yaml not found!"
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$PUBSPEC")
           cp -a "$PROJECT_DIR"/. .
 
-          echo "Flutter project extracted successfully."
+          echo "Project extracted successfully."
 
       - name: Configure Firebase
         run: |
@@ -65,30 +65,24 @@ jobs:
           target = Path("android/app/google-services.json")
 
           candidates = list(Path(".").rglob("google-services*.json"))
-
           valid_file = None
 
           for file in candidates:
-              if ".git" in file.parts:
-                  continue
-
-              if file == target:
+              if ".git" in file.parts or file == target:
                   continue
 
               try:
                   data = json.loads(file.read_text())
-
                   packages = [
-                      client.get("client_info", {})
-                      .get("android_client_info", {})
-                      .get("package_name")
-                      for client in data.get("client", [])
+                      c.get("client_info", {})
+                       .get("android_client_info", {})
+                       .get("package_name")
+                      for c in data.get("client", [])
                   ]
 
                   if PACKAGE in packages:
                       valid_file = file
                       break
-
               except Exception:
                   continue
 
@@ -100,45 +94,44 @@ jobs:
           target.parent.mkdir(parents=True, exist_ok=True)
           shutil.copy2(valid_file, target)
 
-          print("Firebase JSON verified successfully.")
-          print("Package:", PACKAGE)
+          print("Firebase configuration verified.")
+
           PY
 
-      - name: Configure Android Package and Desugaring
+      - name: Fix Android Package and Desugaring
         run: |
           python3 - <<'PY'
           import re
           from pathlib import Path
 
           PACKAGE = "com.example.moeen.app"
-
           gradle = Path("android/app/build.gradle.kts")
 
           if not gradle.exists():
-              raise SystemExit("ERROR: app/build.gradle.kts missing!")
+              raise SystemExit("app/build.gradle.kts missing!")
 
           content = gradle.read_text()
 
-          content, namespace_count = re.subn(
+          content, ns = re.subn(
               r'namespace\s*=\s*"[^"]+"',
               f'namespace = "{PACKAGE}"',
               content,
               count=1
           )
 
-          content, app_count = re.subn(
+          content, app = re.subn(
               r'applicationId\s*=\s*"[^"]+"',
               f'applicationId = "{PACKAGE}"',
               content,
               count=1
           )
 
-          if namespace_count != 1 or app_count != 1:
-              raise SystemExit("ERROR: Could not update namespace/applicationId!")
+          if ns != 1 or app != 1:
+              raise SystemExit("Could not configure Android package!")
 
           if "isCoreLibraryDesugaringEnabled" not in content:
               if "compileOptions {" not in content:
-                  raise SystemExit("ERROR: compileOptions block missing!")
+                  raise SystemExit("compileOptions block missing!")
 
               content = content.replace(
                   "compileOptions {",
@@ -146,9 +139,7 @@ jobs:
                   1
               )
 
-          dependency = (
-              'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
-          )
+          dependency = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
 
           if dependency not in content:
               if "dependencies {" in content:
@@ -158,25 +149,19 @@ jobs:
                       1
                   )
               else:
-                  content += (
-                      "\n\ndependencies {\n    "
-                      + dependency
-                      + "\n}\n"
-                  )
+                  content += "\n\ndependencies {\n    " + dependency + "\n}\n"
 
           gradle.write_text(content)
 
-          # Update MainActivity package declaration
           activities = list(
               Path("android/app/src/main").rglob("MainActivity.kt")
           )
 
           if not activities:
-              raise SystemExit("ERROR: MainActivity.kt not found!")
+              raise SystemExit("MainActivity.kt missing!")
 
           for activity in activities:
               source = activity.read_text()
-
               source, count = re.subn(
                   r'(?m)^package\s+[\w.]+',
                   f'package {PACKAGE}',
@@ -189,27 +174,99 @@ jobs:
 
               activity.write_text(source)
 
-          print("Android package configured:", PACKAGE)
-          print("Desugaring configured.")
+          print("Package configured:", PACKAGE)
           PY
 
-      - name: Verify Gradle Wrapper
+      - name: Create Valid Android Manifest
         run: |
-          echo "Checking original Gradle version..."
+          mkdir -p android/app/src/main
+
+          cat > android/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.CAMERA"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+
+              <uses-permission
+                  android:name="android.permission.READ_EXTERNAL_STORAGE"
+                  android:maxSdkVersion="32"/>
+
+              <uses-permission
+                  android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+                  android:maxSdkVersion="32"/>
+
+              <application
+                  android:label="Battle Arena"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:taskAffinity=""
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme"/>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+
+                  </activity>
+
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2"/>
+
+                  <meta-data
+                      android:name="com.google.firebase.messaging.default_notification_channel_id"
+                      android:value="high_importance_channel"/>
+
+              </application>
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.PROCESS_TEXT"/>
+                      <data android:mimeType="text/plain"/>
+                  </intent>
+              </queries>
+
+          </manifest>
+          EOF
+
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse("android/app/src/main/AndroidManifest.xml")
+          print("Android Manifest XML is valid.")
+          PY
+
+      - name: Verify Original Gradle Version
+        run: |
           cat android/gradle/wrapper/gradle-wrapper.properties
 
           grep -q "gradle-9.3.1-all.zip" \
             android/gradle/wrapper/gradle-wrapper.properties || {
-              echo "ERROR: Expected Gradle 9.3.1 in project ZIP!"
+              echo "ERROR: Gradle 9.3.1 not found in project ZIP!"
               exit 1
             }
 
-          echo "Original Gradle 9.3.1 preserved."
+          echo "Gradle version verified."
 
-      - name: Verify App Assets
+      - name: Verify App Logo
         run: |
           test -f assets/app_logo.png || {
-            echo "ERROR: App logo missing!"
+            echo "ERROR: assets/app_logo.png missing!"
             exit 1
           }
 
@@ -228,4 +285,3 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
-          
