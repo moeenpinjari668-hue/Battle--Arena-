@@ -2,340 +2,257 @@
 name: Build Battle Arena APK
 
 on:
-  push:
   workflow_dispatch:
+  push:
+    paths:
+      - "*.zip"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Build Android Release APK
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout Code
+      # 1. Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      # 2. Java setup
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: zulu
-          java-version: '17'
+          distribution: temurin
+          java-version: "17"
 
-      - name: Setup Flutter
+      # 3. Flutter setup
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      - name: Extract Flutter Project
+      # 4. Extract the single project ZIP
+      - name: Extract Battle Arena project
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found!"
-            exit 1
-          fi
-
-          mkdir -p extracted
-          unzip -q "$ZIP_FILE" -d extracted
-
-          PUBSPEC=$(find extracted -name pubspec.yaml | head -n 1)
-
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml not found!"
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$PUBSPEC")
-          cp -a "$PROJECT_DIR"/. .
-
-          echo "Flutter project extracted."
-
-      - name: Fix Android Gradle Plugin Version
-        run: |
           python3 - <<'PY'
-          import re
-          from pathlib import Path
+          import glob
+          import os
+          import shutil
+          import zipfile
 
-          settings = Path("android/settings.gradle.kts")
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          zips = glob.glob(os.path.join(workspace, "*.zip"))
 
-          if not settings.exists():
-              raise SystemExit("ERROR: settings.gradle.kts not found!")
+          if len(zips) != 1:
+              raise SystemExit(
+                  f"ERROR: Repository root mein exactly 1 ZIP hona chahiye. "
+                  f"Abhi {len(zips)} ZIP mile: {zips}"
+              )
 
-          content = settings.read_text()
+          archive = zips[0]
+          extract_dir = os.path.join(workspace, "_extracted")
+          project_dir = os.path.join(workspace, "battle_arena_project")
 
-          pattern = (
-              r'(id\("com\.android\.application"\)\s+version\s+")'
-              r'[^"]+(")'
+          shutil.rmtree(extract_dir, ignore_errors=True)
+          shutil.rmtree(project_dir, ignore_errors=True)
+          os.makedirs(extract_dir, exist_ok=True)
+
+          with zipfile.ZipFile(archive) as z:
+              bad = z.testzip()
+              if bad:
+                  raise SystemExit(f"ZIP corrupt hai: {bad}")
+              z.extractall(extract_dir)
+
+          candidates = []
+          for root, dirs, files in os.walk(extract_dir):
+              dirs[:] = [d for d in dirs if d not in [".git", "build"]]
+              if "pubspec.yaml" in files:
+                  candidates.append(root)
+
+          if len(candidates) != 1:
+              raise SystemExit(
+                  f"ERROR: Ek Flutter project root expected tha, "
+                  f"lekin {len(candidates)} mile: {candidates}"
+              )
+
+          shutil.copytree(
+              candidates[0],
+              project_dir,
+              ignore=shutil.ignore_patterns(".git", ".dart_tool", "build")
           )
 
-          updated, count = re.subn(
-              pattern,
-              r'\g<1>9.1.1\2',
-              content,
+          print("Flutter project extracted:", project_dir)
+          PY
+
+      # 5. Validate Android Firebase configuration
+      - name: Verify Firebase Android configuration
+        working-directory: battle_arena_project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f android/app/google-services.json || {
+            echo "ERROR: android/app/google-services.json missing"
+            exit 1
+          }
+
+          python3 - <<'PY'
+          import json
+
+          path = "android/app/google-services.json"
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+
+          project_id = data.get("project_info", {}).get("project_id")
+          clients = data.get("client", [])
+
+          expected_package = "com.example.moeen.app"
+          matches = []
+
+          for client in clients:
+              package_name = (
+                  client.get("client_info", {})
+                  .get("android_client_info", {})
+                  .get("package_name")
+              )
+              if package_name == expected_package:
+                  matches.append(client)
+
+          if project_id != "moeen-3fe9f":
+              raise SystemExit(
+                  f"ERROR: Unexpected Firebase project: {project_id}"
+              )
+
+          if not matches:
+              raise SystemExit(
+                  "ERROR: Firebase JSON mein expected Android package "
+                  f"{expected_package} nahi mila."
+              )
+
+          print("Firebase project and Android package verified.")
+          PY
+
+      # 6. Verify app package and launcher icon
+      - name: Verify Android project files
+        working-directory: battle_arena_project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f lib/main.dart
+          test -f android/app/build.gradle.kts
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f assets/app_logo.png
+
+          grep -q 'com.example.moeen.app' \
+            android/app/build.gradle.kts
+
+          grep -q 'Firebase.initializeApp' lib/main.dart
+
+          echo "Required project files verified."
+
+      # 7. Android Gradle compatibility
+      - name: Configure Android Gradle
+        working-directory: battle_arena_project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          settings = Path("android/settings.gradle.kts")
+          text = settings.read_text(encoding="utf-8")
+
+          text, count = re.subn(
+              r'(id\("com\.android\.application"\)\s+version\s+")([^"]+)(")',
+              r'\g<1>9.1.1\3',
+              text,
               count=1
           )
 
           if count != 1:
-              raise SystemExit("ERROR: Could not update AGP version!")
-
-          settings.write_text(updated)
-
-          print("Android Gradle Plugin set to 9.1.1")
-          print("Gradle Wrapper remains unchanged.")
-          PY
-
-      - name: Configure AGP 9 Compatibility
-        run: |
-          set -e
-
-          PROPERTIES="android/gradle.properties"
-
-          mkdir -p android
-          touch "$PROPERTIES"
-
-          sed -i '/^android\.builtInKotlin=/d' "$PROPERTIES"
-          sed -i '/^android\.newDsl=/d' "$PROPERTIES"
-
-          echo "android.builtInKotlin=false" >> "$PROPERTIES"
-          echo "android.newDsl=false" >> "$PROPERTIES"
-
-          echo "AGP 9 compatibility settings:"
-          cat "$PROPERTIES"
-
-      - name: Configure Firebase
-        run: |
-          python3 - <<'PY'
-          import json
-          import shutil
-          from pathlib import Path
-
-          PACKAGE = "com.example.moeen.app"
-          target = Path("android/app/google-services.json")
-
-          candidates = list(Path(".").rglob("google-services*.json"))
-          valid_file = None
-
-          for file in candidates:
-              if ".git" in file.parts or file == target:
-                  continue
-
-              try:
-                  data = json.loads(file.read_text())
-
-                  packages = [
-                      c.get("client_info", {})
-                       .get("android_client_info", {})
-                       .get("package_name")
-                      for c in data.get("client", [])
-                  ]
-
-                  if PACKAGE in packages:
-                      valid_file = file
-                      break
-
-              except Exception:
-                  continue
-
-          if valid_file is None:
               raise SystemExit(
-                  "ERROR: Firebase JSON for " + PACKAGE + " not found!"
+                  "ERROR: Android Gradle Plugin version line not found."
               )
 
-          target.parent.mkdir(parents=True, exist_ok=True)
-          shutil.copy2(valid_file, target)
+          settings.write_text(text, encoding="utf-8")
 
-          print("Firebase configuration verified.")
-          print("Package:", PACKAGE)
-          PY
-
-      - name: Configure Android Package
-        run: |
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-
-          PACKAGE = "com.example.moeen.app"
-
-          gradle = Path("android/app/build.gradle.kts")
-
-          if not gradle.exists():
-              raise SystemExit("ERROR: app/build.gradle.kts not found!")
-
-          content = gradle.read_text()
-
-          content, ns = re.subn(
-              r'namespace\s*=\s*"[^"]+"',
-              f'namespace = "{PACKAGE}"',
-              content,
-              count=1
+          props = Path("android/gradle.properties")
+          lines = (
+              props.read_text(encoding="utf-8").splitlines()
+              if props.exists() else []
           )
 
-          content, app = re.subn(
-              r'applicationId\s*=\s*"[^"]+"',
-              f'applicationId = "{PACKAGE}"',
-              content,
-              count=1
-          )
-
-          if ns != 1 or app != 1:
-              raise SystemExit("ERROR: Android package update failed!")
-
-          if "isCoreLibraryDesugaringEnabled" not in content:
-              content = content.replace(
-                  "compileOptions {",
-                  "compileOptions {\n        isCoreLibraryDesugaringEnabled = true",
-                  1
-              )
-
-          dependency = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
-
-          if dependency not in content:
-              if "dependencies {" in content:
-                  content = content.replace(
-                      "dependencies {",
-                      "dependencies {\n    " + dependency,
-                      1
-                  )
-              else:
-                  content += "\n\ndependencies {\n    " + dependency + "\n}\n"
-
-          gradle.write_text(content)
-
-          activities = list(
-              Path("android/app/src/main").rglob("MainActivity.kt")
-          )
-
-          if not activities:
-              raise SystemExit("ERROR: MainActivity.kt not found!")
-
-          for activity in activities:
-              source = activity.read_text()
-
-              source, count = re.subn(
-                  r'(?m)^package\s+[\w.]+',
-                  f'package {PACKAGE}',
-                  source,
-                  count=1
-              )
-
-              if count == 0:
-                  source = f"package {PACKAGE}\n\n" + source
-
-              activity.write_text(source)
-
-          print("Android package:", PACKAGE)
-          print("Desugaring configured.")
-          PY
-
-      - name: Create Valid Android Manifest
-        run: |
-          mkdir -p android/app/src/main
-
-          cat > android/app/src/main/AndroidManifest.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.CAMERA"/>
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-
-              <uses-permission
-                  android:name="android.permission.READ_EXTERNAL_STORAGE"
-                  android:maxSdkVersion="32"/>
-
-              <uses-permission
-                  android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-                  android:maxSdkVersion="32"/>
-
-              <application
-                  android:label="Battle Arena"
-                  android:name="${applicationName}"
-                  android:icon="@mipmap/ic_launcher">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:launchMode="singleTop"
-                      android:taskAffinity=""
-                      android:theme="@style/LaunchTheme"
-                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                      android:hardwareAccelerated="true"
-                      android:windowSoftInputMode="adjustResize">
-
-                      <meta-data
-                          android:name="io.flutter.embedding.android.NormalTheme"
-                          android:resource="@style/NormalTheme"/>
-
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-
-                  </activity>
-
-                  <meta-data
-                      android:name="flutterEmbedding"
-                      android:value="2"/>
-
-                  <meta-data
-                      android:name="com.google.firebase.messaging.default_notification_channel_id"
-                      android:value="high_importance_channel"/>
-
-              </application>
-
-              <queries>
-                  <intent>
-                      <action android:name="android.intent.action.PROCESS_TEXT"/>
-                      <data android:mimeType="text/plain"/>
-                  </intent>
-              </queries>
-
-          </manifest>
-          EOF
-
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          ET.parse("android/app/src/main/AndroidManifest.xml")
-          print("Manifest XML verified.")
-          PY
-
-      - name: Verify Gradle Wrapper
-        run: |
-          cat android/gradle/wrapper/gradle-wrapper.properties
-
-          grep -q "gradle-9.3.1-all.zip" \
-            android/gradle/wrapper/gradle-wrapper.properties || {
-              echo "ERROR: Expected Gradle 9.3.1!"
-              exit 1
-            }
-
-          echo "Gradle wrapper verified."
-
-      - name: Verify App Logo
-        run: |
-          test -f assets/app_logo.png || {
-            echo "ERROR: App logo missing!"
-            exit 1
+          values = {
+              "android.useAndroidX": "true",
+              "android.newDsl": "false",
+              "android.builtInKotlin": "false",
           }
 
-          echo "App logo verified."
+          for key, value in values.items():
+              lines = [
+                  line for line in lines
+                  if not line.strip().startswith(key + "=")
+              ]
+              lines.append(f"{key}={value}")
 
-      - name: Get Flutter Dependencies
+          props.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          print("Gradle compatibility settings applied.")
+          PY
+
+          grep -q 'gradle-9.3.1' \
+            android/gradle/wrapper/gradle-wrapper.properties
+
+      # 8. Flutter dependencies
+      - name: Get Flutter packages
+        working-directory: battle_arena_project
         run: flutter pub get
 
-      - name: Build Release APK
-        run: flutter build apk --release
+      # 9. Analyze Dart code
+      - name: Check Dart code
+        working-directory: battle_arena_project
+        run: flutter analyze --no-pub
+        continue-on-error: true
 
-      - name: Upload APK Artifact
+      # 10. Build release APK
+      - name: Build Battle Arena APK
+        working-directory: battle_arena_project
+        run: |
+          flutter build apk --release
+
+      # 11. Verify APK exists
+      - name: Verify APK
+        working-directory: battle_arena_project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: Release APK missing or empty."
+            exit 1
+          fi
+
+          ls -lh "$APK"
+          sha256sum "$APK"
+
+      # 12. Upload APK artifact
+      - name: Upload Battle Arena APK
         uses: actions/upload-artifact@v4
         with:
-          name: BattleArena-Release-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: Battle-Arena-Release-APK
+          path: battle_arena_project/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
