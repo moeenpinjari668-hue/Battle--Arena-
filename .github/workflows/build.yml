@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Android Release APK
+    name: Build Battle Arena Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -22,21 +22,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Java setup
+      # 2. Java 17
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      # 3. Flutter setup
+      # 3. Flutter
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      # 4. Extract the single project ZIP
+      # 4. Extract project ZIP
       - name: Extract Battle Arena project
         shell: bash
         run: |
@@ -53,8 +53,8 @@ jobs:
 
           if len(zips) != 1:
               raise SystemExit(
-                  f"ERROR: Repository root mein exactly 1 ZIP hona chahiye. "
-                  f"Abhi {len(zips)} ZIP mile: {zips}"
+                  f"ERROR: Root folder mein exactly 1 ZIP hona chahiye. "
+                  f"Found: {len(zips)}"
               )
 
           archive = zips[0]
@@ -68,46 +68,59 @@ jobs:
           with zipfile.ZipFile(archive) as z:
               bad = z.testzip()
               if bad:
-                  raise SystemExit(f"ZIP corrupt hai: {bad}")
+                  raise SystemExit(f"Corrupt ZIP file: {bad}")
+
+              for member in z.infolist():
+                  target = os.path.realpath(
+                      os.path.join(extract_dir, member.filename)
+                  )
+                  if not target.startswith(
+                      os.path.realpath(extract_dir) + os.sep
+                  ):
+                      raise SystemExit("Unsafe ZIP path detected.")
               z.extractall(extract_dir)
 
           candidates = []
+
           for root, dirs, files in os.walk(extract_dir):
-              dirs[:] = [d for d in dirs if d not in [".git", "build"]]
+              dirs[:] = [
+                  d for d in dirs
+                  if d not in [".git", ".dart_tool", "build"]
+              ]
+
               if "pubspec.yaml" in files:
                   candidates.append(root)
 
           if len(candidates) != 1:
               raise SystemExit(
-                  f"ERROR: Ek Flutter project root expected tha, "
-                  f"lekin {len(candidates)} mile: {candidates}"
+                  f"Expected one Flutter project, found: {candidates}"
               )
 
           shutil.copytree(
               candidates[0],
               project_dir,
-              ignore=shutil.ignore_patterns(".git", ".dart_tool", "build")
+              ignore=shutil.ignore_patterns(
+                  ".git", ".dart_tool", "build"
+              )
           )
 
-          print("Flutter project extracted:", project_dir)
+          print("Project extracted successfully.")
           PY
 
-      # 5. Validate Android Firebase configuration
-      - name: Verify Firebase Android configuration
+      # 5. Verify Firebase configuration
+      - name: Verify Firebase configuration
         working-directory: battle_arena_project
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f android/app/google-services.json || {
-            echo "ERROR: android/app/google-services.json missing"
-            exit 1
-          }
+          test -f android/app/google-services.json
 
           python3 - <<'PY'
           import json
 
           path = "android/app/google-services.json"
+
           with open(path, encoding="utf-8") as f:
               data = json.load(f)
 
@@ -115,7 +128,8 @@ jobs:
           clients = data.get("client", [])
 
           expected_package = "com.example.moeen.app"
-          matches = []
+
+          matching = []
 
           for client in clients:
               package_name = (
@@ -123,43 +137,44 @@ jobs:
                   .get("android_client_info", {})
                   .get("package_name")
               )
+
               if package_name == expected_package:
-                  matches.append(client)
+                  matching.append(client)
 
           if project_id != "moeen-3fe9f":
               raise SystemExit(
-                  f"ERROR: Unexpected Firebase project: {project_id}"
+                  f"Wrong Firebase project: {project_id}"
               )
 
-          if not matches:
+          if not matching:
               raise SystemExit(
-                  "ERROR: Firebase JSON mein expected Android package "
-                  f"{expected_package} nahi mila."
+                  "Firebase Android package ID does not match."
               )
 
-          print("Firebase project and Android package verified.")
+          print("Firebase configuration verified.")
           PY
 
-      # 6. Verify app package and launcher icon
-      - name: Verify Android project files
+      # 6. Verify project files
+      - name: Verify project files
         working-directory: battle_arena_project
         shell: bash
         run: |
           set -euo pipefail
 
+          test -f pubspec.yaml
           test -f lib/main.dart
+          test -f android/settings.gradle.kts
           test -f android/app/build.gradle.kts
+          test -f android/app/google-services.json
           test -f android/app/src/main/AndroidManifest.xml
           test -f assets/app_logo.png
 
           grep -q 'com.example.moeen.app' \
             android/app/build.gradle.kts
 
-          grep -q 'Firebase.initializeApp' lib/main.dart
+          echo "Project files verified."
 
-          echo "Required project files verified."
-
-      # 7. Android Gradle compatibility
+      # 7. Configure Android Gradle compatibility
       - name: Configure Android Gradle
         working-directory: battle_arena_project
         shell: bash
@@ -182,12 +197,13 @@ jobs:
 
           if count != 1:
               raise SystemExit(
-                  "ERROR: Android Gradle Plugin version line not found."
+                  "Android Gradle Plugin declaration not found."
               )
 
           settings.write_text(text, encoding="utf-8")
 
           props = Path("android/gradle.properties")
+
           lines = (
               props.read_text(encoding="utf-8").splitlines()
               if props.exists() else []
@@ -206,33 +222,118 @@ jobs:
               ]
               lines.append(f"{key}={value}")
 
-          props.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          props.write_text(
+              "\n".join(lines) + "\n",
+              encoding="utf-8"
+          )
 
-          print("Gradle compatibility settings applied.")
+          print("Gradle compatibility configured.")
           PY
 
           grep -q 'gradle-9.3.1' \
             android/gradle/wrapper/gradle-wrapper.properties
 
-      # 8. Flutter dependencies
+      # 8. Fix core library desugaring
+      - name: Enable core library desugaring
+        working-directory: battle_arena_project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("android/app/build.gradle.kts")
+          text = path.read_text(encoding="utf-8")
+
+          # Enable desugaring in compileOptions
+          if "isCoreLibraryDesugaringEnabled" not in text:
+              pattern = r'(?m)^(\s*)compileOptions\s*\{'
+
+              text, count = re.subn(
+                  pattern,
+                  lambda m: (
+                      m.group(0)
+                      + "\n"
+                      + m.group(1)
+                      + "    isCoreLibraryDesugaringEnabled = true"
+                  ),
+                  text,
+                  count=1
+              )
+
+              if count != 1:
+                  raise SystemExit(
+                      "ERROR: compileOptions block not found."
+                  )
+
+          # Add required dependency
+          dependency = (
+              'coreLibraryDesugaring('
+              '"com.android.tools:desugar_jdk_libs:2.1.5")'
+          )
+
+          if "desugar_jdk_libs" not in text:
+              match = re.search(
+                  r'(?m)^dependencies\s*\{',
+                  text
+              )
+
+              if match:
+                  text = (
+                      text[:match.end()]
+                      + "\n    " + dependency
+                      + text[match.end():]
+                  )
+              else:
+                  marker = re.search(
+                      r'(?m)^kotlin\s*\{',
+                      text
+                  )
+
+                  if not marker:
+                      raise SystemExit(
+                          "ERROR: Cannot locate dependencies insertion point."
+                      )
+
+                  text = (
+                      text[:marker.start()]
+                      + "dependencies {\n    "
+                      + dependency
+                      + "\n}\n\n"
+                      + text[marker.start():]
+                  )
+
+          path.write_text(text, encoding="utf-8")
+
+          print("Core library desugaring enabled.")
+          PY
+
+          grep -q 'isCoreLibraryDesugaringEnabled = true' \
+            android/app/build.gradle.kts
+
+          grep -q 'desugar_jdk_libs' \
+            android/app/build.gradle.kts
+
+      # 9. Flutter dependencies
       - name: Get Flutter packages
         working-directory: battle_arena_project
         run: flutter pub get
 
-      # 9. Analyze Dart code
-      - name: Check Dart code
+      # 10. Dart analysis
+      - name: Analyze Flutter code
         working-directory: battle_arena_project
         run: flutter analyze --no-pub
         continue-on-error: true
 
-      # 10. Build release APK
+      # 11. Build release APK
       - name: Build Battle Arena APK
         working-directory: battle_arena_project
-        run: |
-          flutter build apk --release
+        run: flutter build apk --release
 
-      # 11. Verify APK exists
-      - name: Verify APK
+      # 12. Verify APK
+      - name: Verify generated APK
         working-directory: battle_arena_project
         shell: bash
         run: |
@@ -241,14 +342,15 @@ jobs:
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "ERROR: Release APK missing or empty."
+            echo "ERROR: APK not generated."
             exit 1
           fi
 
+          echo "APK generated successfully."
           ls -lh "$APK"
           sha256sum "$APK"
 
-      # 12. Upload APK artifact
+      # 13. Upload APK
       - name: Upload Battle Arena APK
         uses: actions/upload-artifact@v4
         with:
@@ -256,3 +358,4 @@ jobs:
           path: battle_arena_project/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
+          
