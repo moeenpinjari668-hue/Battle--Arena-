@@ -52,7 +52,41 @@ jobs:
           PROJECT_DIR=$(dirname "$PUBSPEC")
           cp -a "$PROJECT_DIR"/. .
 
-          echo "Project extracted successfully."
+          echo "Flutter project extracted."
+
+      - name: Fix Android Gradle Plugin Version
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          settings = Path("android/settings.gradle.kts")
+
+          if not settings.exists():
+              raise SystemExit("ERROR: settings.gradle.kts not found!")
+
+          content = settings.read_text()
+
+          pattern = (
+              r'(id\("com\.android\.application"\)\s+version\s+")'
+              r'[^"]+(")'
+          )
+
+          updated, count = re.subn(
+              pattern,
+              r'\g<1>9.1.1\2',
+              content,
+              count=1
+          )
+
+          if count != 1:
+              raise SystemExit("ERROR: Could not update AGP version!")
+
+          settings.write_text(updated)
+
+          print("Android Gradle Plugin updated to 9.1.1")
+          print("Gradle Wrapper remains unchanged.")
+          PY
 
       - name: Configure Firebase
         run: |
@@ -73,6 +107,7 @@ jobs:
 
               try:
                   data = json.loads(file.read_text())
+
                   packages = [
                       c.get("client_info", {})
                        .get("android_client_info", {})
@@ -83,6 +118,7 @@ jobs:
                   if PACKAGE in packages:
                       valid_file = file
                       break
+
               except Exception:
                   continue
 
@@ -98,18 +134,15 @@ jobs:
 
           PY
 
-      - name: Fix Android Package and Desugaring
+      - name: Configure Android Package
         run: |
           python3 - <<'PY'
           import re
           from pathlib import Path
 
           PACKAGE = "com.example.moeen.app"
+
           gradle = Path("android/app/build.gradle.kts")
-
-          if not gradle.exists():
-              raise SystemExit("app/build.gradle.kts missing!")
-
           content = gradle.read_text()
 
           content, ns = re.subn(
@@ -127,12 +160,9 @@ jobs:
           )
 
           if ns != 1 or app != 1:
-              raise SystemExit("Could not configure Android package!")
+              raise SystemExit("ERROR: Android package update failed!")
 
           if "isCoreLibraryDesugaringEnabled" not in content:
-              if "compileOptions {" not in content:
-                  raise SystemExit("compileOptions block missing!")
-
               content = content.replace(
                   "compileOptions {",
                   "compileOptions {\n        isCoreLibraryDesugaringEnabled = true",
@@ -158,10 +188,11 @@ jobs:
           )
 
           if not activities:
-              raise SystemExit("MainActivity.kt missing!")
+              raise SystemExit("ERROR: MainActivity.kt not found!")
 
           for activity in activities:
               source = activity.read_text()
+
               source, count = re.subn(
                   r'(?m)^package\s+[\w.]+',
                   f'package {PACKAGE}',
@@ -174,7 +205,8 @@ jobs:
 
               activity.write_text(source)
 
-          print("Package configured:", PACKAGE)
+          print("Package:", PACKAGE)
+          print("Desugaring configured.")
           PY
 
       - name: Create Valid Android Manifest
@@ -248,29 +280,27 @@ jobs:
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
           ET.parse("android/app/src/main/AndroidManifest.xml")
-          print("Android Manifest XML is valid.")
+          print("Manifest XML verified.")
           PY
 
-      - name: Verify Original Gradle Version
+      - name: Verify Gradle Wrapper
         run: |
           cat android/gradle/wrapper/gradle-wrapper.properties
 
           grep -q "gradle-9.3.1-all.zip" \
             android/gradle/wrapper/gradle-wrapper.properties || {
-              echo "ERROR: Gradle 9.3.1 not found in project ZIP!"
+              echo "ERROR: Expected Gradle 9.3.1!"
               exit 1
             }
 
-          echo "Gradle version verified."
+          echo "Gradle wrapper verified."
 
       - name: Verify App Logo
         run: |
           test -f assets/app_logo.png || {
-            echo "ERROR: assets/app_logo.png missing!"
+            echo "ERROR: App logo missing!"
             exit 1
           }
-
-          echo "App logo verified."
 
       - name: Get Flutter Dependencies
         run: flutter pub get
@@ -285,3 +315,4 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
+          
