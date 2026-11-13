@@ -1,4 +1,3 @@
-
 name: Build Battle Arena APK
 
 on:
@@ -13,25 +12,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Install Java 17
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      # 3. Install Flutter
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      # 4. Extract Battle Arena source ZIP
       - name: Extract Battle Arena source ZIP
         run: |
           if [ -f "Battle-Arena-Startup-Fix-Source-Updated.zip" ]; then
@@ -40,24 +35,14 @@ jobs:
             ZIP_FILE="Battle-Arena-Startup-Fix-Source.zip"
           else
             echo "ERROR: Battle Arena source ZIP not found."
-            echo "Files available in repository:"
             find . -maxdepth 3 -type f
             exit 1
           fi
-
           echo "Using source ZIP: $ZIP_FILE"
-
           mkdir -p battle_arena_project
           unzip -q "$ZIP_FILE" -d battle_arena_project
+          test -f battle_arena_project/pubspec.yaml || { echo "ERROR: pubspec.yaml not found"; exit 1; }
 
-          if [ ! -f "battle_arena_project/pubspec.yaml" ]; then
-            echo "ERROR: pubspec.yaml not found."
-            echo "Extracted files:"
-            find battle_arena_project -maxdepth 4 -type f | head -100
-            exit 1
-          fi
-
-      # 5. Configure Android compatibility
       - name: Configure Android compatibility
         working-directory: battle_arena_project
         run: |
@@ -65,153 +50,148 @@ jobs:
           from pathlib import Path
           import re
 
-          # Update Android Gradle Plugin to 9.1.1
           settings = Path("android/settings.gradle.kts")
-
-          if not settings.exists():
-              raise SystemExit("ERROR: settings.gradle.kts not found")
-
           content = settings.read_text()
-
           pattern = r'(id\("com\.android\.application"\)\s+version\s+")([^"]+)(")'
-
-          content, count = re.subn(
-              pattern,
-              r'\g<1>9.1.1\3',
-              content,
-              count=1
-          )
-
+          content, count = re.subn(pattern, r'\g<1>9.1.1\3', content, count=1)
           if count == 0:
-              raise SystemExit(
-                  "ERROR: Could not find Android application plugin version."
-              )
-
+              raise SystemExit("ERROR: Android application plugin version not found")
           settings.write_text(content)
 
-          # Set Android compatibility properties
           props = Path("android/gradle.properties")
           content = props.read_text() if props.exists() else ""
-
-          lines = [
-              line for line in content.splitlines()
-              if not line.strip().startswith("android.newDsl=")
-              and not line.strip().startswith("android.builtInKotlin=")
-          ]
-
-          lines.extend([
-              "android.newDsl=false",
-              "android.builtInKotlin=false"
-          ])
-
+          lines = [line for line in content.splitlines()
+                   if not line.strip().startswith("android.newDsl=")
+                   and not line.strip().startswith("android.builtInKotlin=")]
+          lines.extend(["android.newDsl=false", "android.builtInKotlin=false"])
           props.write_text("\n".join(lines) + "\n")
 
-          # Enable Java core library desugaring
           app_gradle = Path("android/app/build.gradle.kts")
           content = app_gradle.read_text()
-
           if "isCoreLibraryDesugaringEnabled = true" not in content:
               target = "targetCompatibility = JavaVersion.VERSION_17"
-
               if target not in content:
-                  raise SystemExit(
-                      "ERROR: Java 17 targetCompatibility not found."
-                  )
-
-              content = content.replace(
-                  target,
-                  target + "\n            isCoreLibraryDesugaringEnabled = true",
-                  1
-              )
-
+                  raise SystemExit("ERROR: Java 17 targetCompatibility not found")
+              content = content.replace(target, target + "\n            isCoreLibraryDesugaringEnabled = true", 1)
           if "coreLibraryDesugaring(" not in content:
-              dependency = '''
-          dependencies {
-              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
-          }
-
-          '''
-
+              dependency = '''\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")\n}\n'''
               if "flutter {" in content:
-                  content = content.replace(
-                      "flutter {",
-                      dependency + "flutter {",
-                      1
-                  )
+                  content = content.replace("flutter {", dependency + "\nflutter {", 1)
               else:
-                  content += "\n" + dependency
-
+                  content += dependency
           app_gradle.write_text(content)
-
-          print("===== Android Gradle Plugin =====")
-          print(settings.read_text())
-
-          print("===== Android Gradle Properties =====")
-          print(props.read_text())
-
           print("Android compatibility configuration completed.")
           PY
 
-      # 6. Verify Firebase configuration
+      - name: Set up permanent APK signing
+        working-directory: battle_arena_project
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "ERROR: ANDROID_KEYSTORE_BASE64 secret is empty"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "ERROR: ANDROID_KEYSTORE_PASSWORD secret is empty"; exit 1; }
+          test -n "$ANDROID_KEY_ALIAS" || { echo "ERROR: ANDROID_KEY_ALIAS secret is empty"; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo "ERROR: ANDROID_KEY_PASSWORD secret is empty"; exit 1; }
+
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF2
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=upload-keystore.jks
+          EOF2
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          gradle = Path("android/app/build.gradle.kts")
+          content = gradle.read_text()
+          if "keystorePropertiesFile" not in content:
+              signing_setup = '''import java.util.Properties
+
+          val keystoreProperties = Properties()
+          val keystorePropertiesFile = rootProject.file("key.properties")
+          require(keystorePropertiesFile.exists()) { "Android signing key.properties is missing" }
+          keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+
+          '''
+              content = signing_setup + content
+
+          if 'create("release")' not in content:
+              content = content.replace(
+                  'android {',
+                  '''android {
+              signingConfigs {
+                  create("release") {
+                      keyAlias = keystoreProperties["keyAlias"] as String
+                      keyPassword = keystoreProperties["keyPassword"] as String
+                      storeFile = file(keystoreProperties["storeFile"] as String)
+                      storePassword = keystoreProperties["storePassword"] as String
+                  }
+              }
+          ''', 1)
+
+          pattern = r'buildTypes\s*\{\s*release\s*\{.*?\}\s*\}'
+          replacement = '''buildTypes {
+                  release {
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+              }'''
+          content, count = re.subn(pattern, replacement, content, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit("ERROR: Could not safely replace Android release buildTypes")
+          if 'signingConfig = signingConfigs.getByName("debug")' in content:
+              raise SystemExit("ERROR: Debug signing is still configured for release")
+          gradle.write_text(content)
+          print("Permanent release signing configured.")
+          PY
+
       - name: Verify Firebase configuration
         working-directory: battle_arena_project
         run: |
-          if [ ! -f "android/app/google-services.json" ]; then
-            echo "ERROR: Firebase google-services.json missing."
-            exit 1
-          fi
-
+          test -f android/app/google-services.json || { echo "ERROR: Firebase google-services.json missing"; exit 1; }
           python3 - <<'PY'
           import json
-
-          path = "android/app/google-services.json"
-
-          with open(path) as f:
+          with open("android/app/google-services.json") as f:
               data = json.load(f)
-
-          clients = data.get("client", [])
-          packages = []
-
-          for client in clients:
-              package_name = (
-                  client.get("client_info", {})
-                  .get("android_client_info", {})
-                  .get("package_name")
-              )
-
-              if package_name:
-                  packages.append(package_name)
-
+          packages = [c.get("client_info", {}).get("android_client_info", {}).get("package_name")
+                      for c in data.get("client", [])]
           print("Firebase package names:", packages)
-
           if "com.example.moeen.app" not in packages:
-              raise SystemExit(
-                  "ERROR: Firebase package com.example.moeen.app not found."
-              )
+              raise SystemExit("ERROR: Firebase package com.example.moeen.app not found")
           PY
 
-      # 7. Flutter clean
       - name: Flutter clean
         working-directory: battle_arena_project
         run: flutter clean
 
-      # 8. Get dependencies
       - name: Get Flutter dependencies
         working-directory: battle_arena_project
         run: flutter pub get
 
-      # 9. Flutter analyze
       - name: Flutter analyze
         working-directory: battle_arena_project
         continue-on-error: true
         run: flutter analyze
 
-      # 10. Build release APK
       - name: Build release APK
         working-directory: battle_arena_project
         run: flutter build apk --release
 
-      # 11. Upload APK
+      - name: Verify APK signature
+        working-directory: battle_arena_project
+        run: |
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          test -f "$APK"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --print-certs "$APK"
+
       - name: Upload Battle Arena APK
         uses: actions/upload-artifact@v4
         with:
@@ -219,4 +199,3 @@ jobs:
           path: battle_arena_project/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
-          
