@@ -1,3 +1,4 @@
+
 name: Build Battle Arena APK
 
 on:
@@ -12,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download repository
+      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -30,24 +31,33 @@ jobs:
           channel: stable
           cache: true
 
-      # 4. Extract source ZIP
+      # 4. Extract Battle Arena source ZIP
       - name: Extract Battle Arena source ZIP
         run: |
-          if [ ! -f "Battle-Arena-Startup-Fix-Source.zip" ]; then
-            echo "ERROR: Source ZIP not found in repository root."
+          if [ -f "Battle-Arena-Startup-Fix-Source-Updated.zip" ]; then
+            ZIP_FILE="Battle-Arena-Startup-Fix-Source-Updated.zip"
+          elif [ -f "Battle-Arena-Startup-Fix-Source.zip" ]; then
+            ZIP_FILE="Battle-Arena-Startup-Fix-Source.zip"
+          else
+            echo "ERROR: Battle Arena source ZIP not found."
+            echo "Files available in repository:"
+            find . -maxdepth 3 -type f
             exit 1
           fi
 
+          echo "Using source ZIP: $ZIP_FILE"
+
           mkdir -p battle_arena_project
-          unzip -q Battle-Arena-Startup-Fix-Source.zip -d battle_arena_project
+          unzip -q "$ZIP_FILE" -d battle_arena_project
 
           if [ ! -f "battle_arena_project/pubspec.yaml" ]; then
             echo "ERROR: pubspec.yaml not found."
-            find battle_arena_project -maxdepth 3 -type f | head -80
+            echo "Extracted files:"
+            find battle_arena_project -maxdepth 4 -type f | head -100
             exit 1
           fi
 
-      # 5. Fix Android Gradle configuration
+      # 5. Configure Android compatibility
       - name: Configure Android compatibility
         working-directory: battle_arena_project
         run: |
@@ -74,12 +84,12 @@ jobs:
 
           if count == 0:
               raise SystemExit(
-                  "ERROR: Could not find Android application plugin version in settings.gradle.kts"
+                  "ERROR: Could not find Android application plugin version."
               )
 
           settings.write_text(content)
 
-          # Set Android Gradle compatibility properties
+          # Set Android compatibility properties
           props = Path("android/gradle.properties")
           content = props.read_text() if props.exists() else ""
 
@@ -180,23 +190,23 @@ jobs:
               )
           PY
 
-      # 7. Clean old build files
+      # 7. Flutter clean
       - name: Flutter clean
         working-directory: battle_arena_project
         run: flutter clean
 
-      # 8. Download dependencies
+      # 8. Get dependencies
       - name: Get Flutter dependencies
         working-directory: battle_arena_project
         run: flutter pub get
 
-      # 9. Analyze project
+      # 9. Flutter analyze
       - name: Flutter analyze
         working-directory: battle_arena_project
         continue-on-error: true
         run: flutter analyze
 
-      # 10. Build APK
+      # 10. Build release APK
       - name: Build release APK
         working-directory: battle_arena_project
         run: flutter build apk --release
