@@ -1,3 +1,4 @@
+
 name: Battle Arena Android APK Build
 
 on:
@@ -18,59 +19,80 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Java setup
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      # 3. Flutter setup
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      # 4. Extract updated source ZIP
       - name: Extract Battle Arena source
         shell: bash
         run: |
           set -e
-
           ZIP_FILE="Battle-Arena-Startup-Fix-Source.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: $ZIP_FILE not found in repository root."
-            echo "Upload the updated source ZIP to the repository root."
+            echo "ERROR: Source ZIP not found."
             exit 1
           fi
 
           mkdir -p battle_arena_project
           unzip -q "$ZIP_FILE" -d battle_arena_project
 
-          if [ ! -f battle_arena_project/pubspec.yaml ]; then
-            echo "ERROR: pubspec.yaml not found after extraction."
+          test -f battle_arena_project/pubspec.yaml
+
+      - name: Fix Android Gradle Plugin version
+        shell: bash
+        run: |
+          set -e
+
+          FILE="battle_arena_project/android/settings.gradle.kts"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: settings.gradle.kts not found."
             exit 1
           fi
 
-          echo "Source ZIP extracted successfully."
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-      # 5. Verify Firebase configuration
+          p = Path("battle_arena_project/android/settings.gradle.kts")
+          text = p.read_text(encoding="utf-8")
+
+          pattern = r'(id\("com\.android\.application"\)\s+version\s+")[^"]+(")'
+          updated, count = re.subn(
+              pattern,
+              r'\g<1>9.1.1\g<2>',
+              text,
+              count=1
+          )
+
+          if count != 1:
+              raise SystemExit("ERROR: Could not update AGP version.")
+
+          p.write_text(updated, encoding="utf-8")
+          print("Android Gradle Plugin updated to 9.1.1")
+          PY
+
       - name: Verify Firebase configuration
         shell: bash
         run: |
           set -e
 
-          PROJECT="battle_arena_project"
-          FIREBASE_JSON="$PROJECT/android/app/google-services.json"
+          FILE="battle_arena_project/android/app/google-services.json"
 
-          if [ ! -f "$FIREBASE_JSON" ]; then
-            echo "ERROR: android/app/google-services.json is missing."
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: google-services.json missing."
             exit 1
           fi
 
@@ -83,30 +105,28 @@ jobs:
               data = json.load(f)
 
           project_id = data.get("project_info", {}).get("project_id")
-          apps = data.get("client", [])
+          clients = data.get("client", [])
 
-          expected_package = "com.example.moeen.app"
           packages = [
-              app.get("client_info", {})
-                 .get("android_client_info", {})
-                 .get("package_name")
-              for app in apps
+              c.get("client_info", {})
+               .get("android_client_info", {})
+               .get("package_name")
+              for c in clients
           ]
 
           print("Firebase project:", project_id)
-          print("Registered Android packages:", packages)
+          print("Android packages:", packages)
 
           if project_id != "moeen-3fe9f":
-              raise SystemExit("ERROR: Firebase project ID mismatch.")
+              raise SystemExit("Firebase project ID mismatch.")
 
-          if expected_package not in packages:
-              raise SystemExit("ERROR: Android package does not match Firebase.")
+          if "com.example.moeen.app" not in packages:
+              raise SystemExit("Firebase Android package mismatch.")
 
           print("Firebase configuration verified.")
           PY
 
-      # 6. Verify Android package and MainActivity
-      - name: Verify Android project
+      - name: Verify Android package
         shell: bash
         run: |
           set -e
@@ -122,10 +142,9 @@ jobs:
           test -f "$PROJECT/android/app/src/main/AndroidManifest.xml"
           test -f "$PROJECT/android/app/src/main/kotlin/com/example/moeen/app/MainActivity.kt"
 
-          echo "Android package and MainActivity verified."
+          echo "Android package verified."
 
-      # 7. Enable core library desugaring
-      - name: Configure Android desugaring
+      - name: Configure Android compatibility and desugaring
         shell: bash
         run: |
           set -e
@@ -133,16 +152,15 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path(
-              "battle_arena_project/android/app/build.gradle.kts"
-          )
+          project = Path("battle_arena_project/android")
+          app_file = project / "app/build.gradle.kts"
 
-          text = path.read_text(encoding="utf-8")
+          text = app_file.read_text(encoding="utf-8")
 
           marker = "compileOptions {"
 
           if marker not in text:
-              raise SystemExit("ERROR: compileOptions block not found.")
+              raise SystemExit("compileOptions block not found.")
 
           if "isCoreLibraryDesugaringEnabled" not in text:
               text = text.replace(
@@ -159,27 +177,42 @@ jobs:
           }
           """
 
-          path.write_text(text, encoding="utf-8")
-          print("Core library desugaring configured.")
+          app_file.write_text(text, encoding="utf-8")
+
+          gradle_properties = project / "gradle.properties"
+          existing = (
+              gradle_properties.read_text(encoding="utf-8")
+              if gradle_properties.exists() else ""
+          )
+
+          flags = [
+              "android.newDsl=false",
+              "android.builtInKotlin=false"
+          ]
+
+          for flag in flags:
+              key = flag.split("=")[0]
+              if key not in existing:
+                  existing += "\n" + flag
+
+          gradle_properties.write_text(existing.strip() + "\n", encoding="utf-8")
+
+          print("Desugaring and Android compatibility configured.")
           PY
 
-      # 8. Flutter dependencies
       - name: Get Flutter dependencies
         working-directory: battle_arena_project
         run: flutter pub get
 
-      # 9. Check project
       - name: Flutter analyze
         working-directory: battle_arena_project
         run: flutter analyze --no-pub
         continue-on-error: true
 
-      # 10. Build release APK
       - name: Build Release APK
         working-directory: battle_arena_project
         run: flutter build apk --release
 
-      # 11. Verify APK
       - name: Verify APK
         shell: bash
         run: |
@@ -188,14 +221,13 @@ jobs:
           APK="battle_arena_project/build/app/outputs/flutter-apk/app-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ERROR: Release APK was not generated."
+            echo "ERROR: APK not generated."
             exit 1
           fi
 
           ls -lh "$APK"
-          echo "APK build completed."
+          echo "APK successfully generated."
 
-      # 12. Upload APK
       - name: Upload Battle Arena APK
         uses: actions/upload-artifact@v4
         with:
@@ -203,3 +235,4 @@ jobs:
           path: battle_arena_project/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 7
+          
